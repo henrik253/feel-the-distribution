@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import random
 import re
@@ -17,13 +16,11 @@ from dotenv import load_dotenv
 
 from tickets import REFUND_CAP_NO_APPROVAL, REFUND_CAP_WITH_APPROVAL
 
-load_dotenv()  # reads GEMINI_API_KEY (and optional GEMINI_MODEL) from .env
+load_dotenv()  # reads ANTHROPIC_API_KEY (and optional ANTHROPIC_MODEL) from .env
 
-# The SDK logs a warning about "automatic function calling" on every plain call. We
-# pass no functions, so it does not apply; keep it out of the students' terminal.
-logging.getLogger("google_genai.models").setLevel(logging.ERROR)
-
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+# Haiku 4.5 is the cheapest current Claude model and one of the few that still accepts a
+# temperature (see call_model). Opus 5, Sonnet 5 and the Fable models reject the parameter.
+DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
 ACTIONS = ("answer", "refund", "hold", "escalate")
 
 # --- 1. render ----------------------------------------------------------------
@@ -57,47 +54,73 @@ def render(ticket: str, account: dict) -> str:
 def call_model(prompt: str, temperature: float | None, model: str) -> str:
     """Send the prompt once and return the raw text the model produced.
 
-    temperature=None means "use the provider's default". Temperature is a knob on the
-    softmax over the next token: 0 sharpens the distribution toward the most likely
-    token, it does not turn the model into a function. You will see that in the data.
+    temperature=None means "use the provider's default" (1.0 for Claude; the range is 0
+    to 1). Temperature is a knob on the softmax over the next token: 0 sharpens the
+    distribution toward the most likely token, it does not turn the model into a
+    function. You will see that in the data.
 
-    Retries on rate limits (HTTP 429) with a short sleep, because the free tier *is* a
+    The Anthropic SDK removed temperature from its typed signature because the newest
+    models (Opus 4.7 and later, Sonnet 5, Fable) refuse it with a 400. The Claude 4.5/4.6
+    line (Haiku 4.5, Sonnet 4.6, Opus 4.6) still honours it, so we pass it through
+    extra_body, which merges it into the request JSON as-is.
+
+    Retries on rate limits (HTTP 429) with a short sleep, because the entry tier *is* a
     per-minute rate limit: a 429 means "the minute is not over yet", not "back off for
     a long time". The run should finish rather than crash at call 37.
     """
-    from google import genai
-    from google.genai import errors, types
+    import anthropic
 
-    client = genai.Client()  # reads GEMINI_API_KEY from the environment
-    config = types.GenerateContentConfig(
-        temperature=temperature,
-        response_mime_type="application/json",  # a request for JSON, not a guarantee
-        max_output_tokens=300,
-    )
-    switch = ("Set GEMINI_MODEL in .env to another free-tier model (for example "
-              "gemini-2.5-flash-lite) and rerun; a saved run replays with --replay.")
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise SystemExit("\nANTHROPIC_API_KEY is not set. Copy .env.example to .env in this "
+                         "directory and paste your key, or run with --provider fake.")
+    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
+    extra = {} if temperature is None else {"temperature": temperature}
+    switch = ("Set ANTHROPIC_MODEL in .env to another model (for example claude-sonnet-4-6) "
+              "and rerun; a saved run replays with --replay.")
     delay = 5
     server_errors = 0
     for attempt in range(30):
         try:
-            resp = client.models.generate_content(model=model, contents=prompt, config=config)
-            return resp.text or ""
-        except errors.ClientError as e:
-            if e.code != 429:
-                raise
+            resp = client.messages.create(
+                model=model,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}],
+                extra_body=extra,
+            )
+            # A request for JSON, not a guarantee: the prompt asks for it, nothing enforces
+            # it. (The API can enforce a schema via output_config; the lab leaves it off on
+            # purpose so you see what an unconstrained sample looks like.)
+            return "".join(b.text for b in resp.content if b.type == "text")
+        except anthropic.AuthenticationError as e:
+            raise SystemExit(f"\nAuthentication failed: {getattr(e, 'message', e)}\n"
+                             "Is ANTHROPIC_API_KEY set in .env in this directory?")
+        except anthropic.BadRequestError as e:
             msg = getattr(e, "message", str(e))
-            if any(w in msg.lower() for w in ("day", "depleted", "billing", "credits")):
-                # A per-day cap or a billing problem, not a per-minute limit: waiting will not help.
-                raise SystemExit(f"\n{model} refused: {msg[:200]}\n{switch}")
+            if any(w in msg.lower() for w in ("credit", "billing", "balance")):
+                # Out of credit, not a per-minute limit: waiting will not help.
+                raise SystemExit(f"\n{model} refused: {msg[:200]}\n"
+                                 "Add credit at https://console.anthropic.com/settings/billing")
+            if "temperature" in msg.lower():
+                raise SystemExit(f"\n{model} refused: {msg[:200]}\n"
+                                 "This model does not take a temperature. Use the default model, "
+                                 "or run with --temperatures default.")
+            raise
+        except anthropic.RateLimitError:
             print(f"    rate limited; sleeping {delay}s", flush=True)
             time.sleep(delay)
-        except errors.ServerError as e:
+        except anthropic.InternalServerError as e:
             server_errors += 1
             if server_errors == 1:
-                print(f"    server error {e.code}: {getattr(e, 'message', str(e))[:120]}", flush=True)
+                print(f"    server error {e.status_code}: {getattr(e, 'message', str(e))[:120]}", flush=True)
             if server_errors >= 5:
-                raise SystemExit(f"\n{model} keeps returning {e.code}; that is the provider, not you. {switch}")
+                raise SystemExit(f"\n{model} keeps returning {e.status_code}; that is the provider, not you. {switch}")
             print(f"    retrying in {delay}s", flush=True)
+            time.sleep(delay)
+        except anthropic.APIConnectionError as e:
+            server_errors += 1
+            if server_errors >= 5:
+                raise SystemExit(f"\nCannot reach the API: {e}. Check your network connection.")
+            print(f"    connection error; retrying in {delay}s", flush=True)
             time.sleep(delay)
     raise SystemExit(f"\nGave up after repeated rate limits on {model}. {switch}")
 
@@ -132,7 +155,7 @@ def fake_model(prompt: str, temperature: float | None, model: str) -> str:
     return json.dumps({"action": action, "refund_amount": amount, "rationale": "fake"})
 
 
-PROVIDERS = {"gemini": call_model, "fake": fake_model}
+PROVIDERS = {"anthropic": call_model, "fake": fake_model}
 
 
 # --- 3. parse -----------------------------------------------------------------
@@ -161,7 +184,7 @@ def parse(raw: str) -> dict:
 
 
 def triage(ticket: str, account: dict, *, temperature: float | None,
-           model: str = DEFAULT_MODEL, provider: str = "gemini") -> dict:
+           model: str = DEFAULT_MODEL, provider: str = "anthropic") -> dict:
     """render -> sample -> parse. Returns one record you can write to a file."""
     prompt = render(ticket, account)
     t0 = time.perf_counter()
@@ -169,7 +192,7 @@ def triage(ticket: str, account: dict, *, temperature: float | None,
     latency_ms = round((time.perf_counter() - t0) * 1000)
     rec = parse(raw)
     rec.update({
-        "model": model if provider == "gemini" else f"FAKE({model})",
+        "model": model if provider != "fake" else f"FAKE({model})",
         "temperature": "default" if temperature is None else temperature,
         "latency_ms": latency_ms,
         "raw": raw,

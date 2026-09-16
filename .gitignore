@@ -1,4 +1,4 @@
-# Secrets — the Gemini key lives in .env and never in a commit
+# Secrets — the Anthropic key lives in .env and never in a commit
 .env
 
 # Run outputs (records, plots). Keep your own; don't commit them.

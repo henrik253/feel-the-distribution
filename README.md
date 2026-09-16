@@ -9,7 +9,9 @@ Everything tonight's lecture said follows from one fact: the component returns a
 ## What you need
 
 - Python 3.12 or newer, and [`uv`](https://docs.astral.sh/uv/) (or plain `pip`).
-- A Gemini API key, one per student, free: https://aistudio.google.com/apikey
+- An Anthropic API key, one per student: https://console.anthropic.com/settings/keys
+  The API is pay-as-you-go; a few dollars of credit covers this lab many times over
+  (the default model costs about ten cents for both parts).
 - Nothing on AWS. The Learner Lab setup and the usage alarms are a checklist to complete
   before Week 2; see *Configuring AWS* in the course guide.
 
@@ -50,9 +52,9 @@ and the homework questions are about the model.
 uv run distribution.py
 ```
 
-One ticket, fifty calls at temperature 0, fifty at the provider's default. About four
-minutes on the free tier, which allows roughly twenty-five calls a minute; the script
-pauses on rate limits and continues. Every call is appended to `runs/distribution.jsonl`
+One ticket, fifty calls at temperature 0, fifty at the provider's default. About two
+minutes; the entry tier allows fifty calls a minute, and the script pauses on rate
+limits and continues. Every call is appended to `runs/distribution.jsonl`
 as it lands, and the summary and plot (`runs/distribution.png`) come at the end.
 
 Fifty is a small sample for a distribution. It is enough to see the shape tonight;
@@ -85,7 +87,7 @@ not a decision.
 uv run slices.py
 ```
 
-Ten tickets, five categories, three runs each, about ninety seconds. The script prints
+Ten tickets, five categories, three runs each, about a minute. The script prints
 the aggregate pass rate first, then the failure rate per category. One category fails
 at least 30% of the time.
 
@@ -108,17 +110,17 @@ The homework asks about all three.
 
 | Symptom | What it is |
 |---|---|
-| `GEMINI_API_KEY` missing / 400 API key not valid | `.env` is not in this directory or the key was pasted with a trailing space |
-| `rate limited; sleeping 5s` repeatedly | Normal on the free tier. The run continues. Check your limits at https://aistudio.google.com/rate-limit |
+| `Authentication failed` / 401 | `.env` is not in this directory or the key was pasted with a trailing space |
+| `rate limited; sleeping 5s` repeatedly | Normal on the entry tier. The run continues. Check your limits at https://console.anthropic.com/settings/limits |
 | `malformed` appears in the action counts | Not a bug. The model returned something that was not a decision. It is counted, because it is a sample too. |
-| `… refused: … quota …` | Free-tier daily caps are **per model**. Set `GEMINI_MODEL=gemini-2.5-flash-lite` (or another free-tier model) in `.env` and rerun. |
-| `… refused: Your prepayment credits are depleted` | Your key belongs to a project with billing, not the free tier. Create the key in a project with no billing attached; the lab is sized for the free tier. |
-| `… keeps returning 503` | The model is overloaded on the provider's side. Switch `GEMINI_MODEL` as above, or wait a few minutes. |
-| Model not found | The default model is pinned in `triage.py`. Set `GEMINI_MODEL` in `.env` to a current free-tier model. |
+| `… refused: … credit balance …` | Your account is out of credit. Add a few dollars at https://console.anthropic.com/settings/billing and rerun. |
+| `… refused: … temperature …` | You set `ANTHROPIC_MODEL` to a model that rejects the temperature parameter (Opus 4.7 and later, Sonnet 5, Fable). Use the default model, or run with `--temperatures default`. |
+| `… keeps returning 5xx` / `overloaded` | The model is overloaded on the provider's side. Set `ANTHROPIC_MODEL=claude-sonnet-4-6` in `.env`, or wait a few minutes. |
+| Model not found | The default model is pinned in `triage.py`. Set `ANTHROPIC_MODEL` in `.env` to a current model. |
 
 ## What this is one instance of
 
-The SDK, the model name, and the free tier are September 2026 details and will change.
+The SDK, the model name, and the price per token are September 2026 details and will change.
 What does not change: a learned component is a function from input to a *distribution*
 over outputs; temperature is a systems parameter that reshapes that distribution; the
 aggregate hides which slice is failing; and the code around the model, not the model,

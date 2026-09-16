@@ -3,7 +3,7 @@
 One fixed ticket. Fifty calls at temperature 0, fifty at the default.
 Plot the action the model chose and the refund amount it proposed.
 
-    uv run distribution.py                 # live, 50 calls per temperature (~4 min)
+    uv run distribution.py                 # live, 50 calls per temperature (~2 min)
     uv run distribution.py --n 100         # the real thing, if you have the time
     uv run distribution.py --n 20          # a quick look
     uv run distribution.py --provider fake # plumbing check, no key, NOT a model
@@ -125,10 +125,10 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--n", type=int, default=50, help="calls per temperature (default 50)")
     p.add_argument("--temperatures", nargs="+", default=["default", "0"],
-                   help="temperatures to run, in order; 'default' means the provider's default. "
-                        "The provider's maximum is 2.")
+                   help="temperatures to run, in order; 'default' means the provider's default "
+                        "(1 for Claude). The range is 0 to 1.")
     p.add_argument("--model", default=DEFAULT_MODEL)
-    p.add_argument("--provider", choices=["gemini", "fake"], default="gemini")
+    p.add_argument("--provider", choices=["anthropic", "fake"], default="anthropic")
     p.add_argument("--replay", type=Path, help="re-summarize and re-plot a saved .jsonl")
     args = p.parse_args()
 
